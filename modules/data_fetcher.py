@@ -57,9 +57,8 @@ class SECDataFetcher:
                     return 0
             
             def get_shares_from_sec():
-                """Multiple strategies to fetch shares from SEC"""
+                """Get shares from SEC with multiple strategies"""
                 try:
-                    # Strategy 1: Try DEI EntityCommonStockSharesOutstanding
                     dei_facts = facts.get('facts', {}).get('dei', {})
                     
                     if 'EntityCommonStockSharesOutstanding' in dei_facts:
@@ -78,7 +77,7 @@ class SECDataFetcher:
                                 if val > 0:
                                     return val
                     
-                    # Strategy 2: Try us-gaap CommonStockSharesOutstanding
+                    # Try us-gaap
                     us_gaap = facts.get('facts', {}).get('us-gaap', {})
                     if 'CommonStockSharesOutstanding' in us_gaap:
                         csso = us_gaap['CommonStockSharesOutstanding'].get('units', {})
@@ -92,60 +91,74 @@ class SECDataFetcher:
                 except:
                     return 0
             
-            def get_current_price_robust():
+            def get_current_price_with_retry(max_retries=3):
                 """
-                Multiple strategies to fetch current price:
-                1. yfinance info['currentPrice']
-                2. yfinance info['regularMarketPrice']
-                3. yfinance history last close
-                4. yfinance fast_info
-                5. Return 0 if all fail (don't error out)
+                Fetch current price with retry logic and multiple strategies
                 """
-                try:
-                    stock = yf.Ticker(self.ticker)
-                    
-                    # Strategy 1: Try info fields
-                    info = stock.info
-                    if info:
-                        price = info.get('currentPrice') or info.get('regularMarketPrice') or info.get('previousClose')
-                        if price and price > 0:
-                            return float(price)
-                    
-                    # Strategy 2: Try fast_info
+                for attempt in range(max_retries):
                     try:
-                        fast_info = stock.fast_info
-                        if fast_info:
-                            price = fast_info.get('lastPrice')
-                            if price and price > 0:
-                                return float(price)
-                    except:
-                        pass
+                        # Strategy 1: yfinance with short timeout
+                        try:
+                            stock = yf.Ticker(self.ticker)
+                            
+                            # Try info dict
+                            try:
+                                info = stock.info
+                                if info:
+                                    price = info.get('currentPrice') or \
+                                           info.get('regularMarketPrice') or \
+                                           info.get('previousClose')
+                                    if price and price > 0:
+                                        return float(price)
+                            except:
+                                pass
+                            
+                            # Try history - last 1 day
+                            try:
+                                hist = stock.history(period="1d")
+                                if not hist.empty:
+                                    price = hist['Close'].iloc[-1]
+                                    if price > 0:
+                                        return float(price)
+                            except:
+                                pass
+                            
+                            # Try history - last 5 days
+                            try:
+                                hist = stock.history(period="5d")
+                                if not hist.empty:
+                                    price = hist['Close'].iloc[-1]
+                                    if price > 0:
+                                        return float(price)
+                            except:
+                                pass
+                        
+                        except:
+                            pass
+                        
+                        # If yfinance fails, try fallback API
+                        try:
+                            # Try using requests to fetch from Yahoo Finance directly
+                            url = f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{self.ticker}?modules=price"
+                            resp = requests.get(url, timeout=5)
+                            if resp.status_code == 200:
+                                data = resp.json()
+                                price = data.get('quoteSummary', {}).get('result', [{}])[0].get('price', {}).get('regularMarketPrice')
+                                if price and price > 0:
+                                    return float(price)
+                        except:
+                            pass
+                        
+                        # If this is not the last attempt, wait before retrying
+                        if attempt < max_retries - 1:
+                            time.sleep(1)  # Wait 1 second before retry
                     
-                    # Strategy 3: Try history - 5 days
-                    try:
-                        hist = stock.history(period="5d")
-                        if not hist.empty:
-                            close_price = hist['Close'].iloc[-1]
-                            if close_price > 0:
-                                return float(close_price)
-                    except:
-                        pass
-                    
-                    # Strategy 4: Try history - 1 month
-                    try:
-                        hist = stock.history(period="1mo")
-                        if not hist.empty:
-                            close_price = hist['Close'].iloc[-1]
-                            if close_price > 0:
-                                return float(close_price)
-                    except:
-                        pass
-                    
-                    # All strategies failed, return 0
-                    return 0
+                    except Exception as e:
+                        if attempt == max_retries - 1:
+                            return 0
+                        time.sleep(1)
                 
-                except Exception as e:
-                    return 0
+                return 0
             
             # Get shares
             shares_absolute = get_shares_from_sec()
@@ -155,9 +168,7 @@ class SECDataFetcher:
                 try:
                     stock = yf.Ticker(self.ticker)
                     info = stock.info
-                    shares_absolute = info.get('sharesOutstanding') or \
-                                    info.get('floatShares') or \
-                                    info.get('sharesFloat') or 0
+                    shares_absolute = info.get('sharesOutstanding') or 0
                 except:
                     pass
             
@@ -167,8 +178,8 @@ class SECDataFetcher:
             else:
                 shares_millions = shares_absolute if shares_absolute > 0 else 1
             
-            # Get current price with robust fallback
-            current_price = get_current_price_robust()
+            # Get current price with retry
+            current_price = get_current_price_with_retry(max_retries=3)
             
             # Return all financial metrics
             return {
