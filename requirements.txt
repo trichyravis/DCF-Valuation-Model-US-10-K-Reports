@@ -1,11 +1,17 @@
 
-# requirements.txt - ULTRA-MINIMAL FOR STREAMLIT CLOUD
-# Stripped down to only essentials
-# All other packages should come from Streamlit's base image
+# Core Framework
+streamlit>=1.41.0
 
-streamlit==1.28.1
-yfinance==0.2.32
-pandas==2.0.3
-numpy==1.24.3
-plotly==5.17.0
-requests==2.31.0
+# Data & Finance
+yfinance>=0.2.35
+requests>=2.31.0
+pandas>=2.2.0
+numpy>=1.26.0
+
+# Math & Charts
+plotly>=5.18.0
+scipy>=1.11.0
+
+# Reports
+fpdf2>=2.7.0
+Pillow>=10.0.0
