@@ -6,50 +6,47 @@ import streamlit as st
 class SECDataFetcher:
     def __init__(self, ticker):
         self.ticker = ticker
+        # Adding a session with headers helps prevent "Too Many Requests" errors
         self.stock = yf.Ticker(ticker)
 
     def get_valuation_inputs(self):
-        """Fetches audited financial data and standardizes to Millions ($M)"""
+        """Fetches audited 10-K financial data and standardizes to Millions ($M)"""
         try:
-            # Fetching Statement Data
-            income = self.stock.financials
-            bs = self.stock.balance_sheet
-            cf = self.stock.cashflow
+            # yfinance pulls the 'financials' table which maps to the 10-K
+            # We use .annuals to ensure we aren't picking up 10-Q (quarterly) data
+            income = self.stock.get_financials(freq='annual')
+            bs = self.stock.get_balance_sheet(freq='annual')
+            cf = self.stock.get_cashflow(freq='annual')
             info = self.stock.info
             
-            # Helper to handle missing labels across different company filings
+            if income.empty or bs.empty:
+                return None
+
             def get_val(df, labels):
                 for label in labels:
                     if label in df.index:
-                        return df.loc[label].iloc[0]
+                        val = df.loc[label].iloc[0]
+                        return val if pd.notnull(val) else 0
                 return 0
 
-            # Extraction Logic (Standardizing to Millions)
+            # 10-K Extraction (Values in Millions)
             revenue = get_val(income, ['Total Revenue', 'Operating Revenue']) / 1e6
-            ebit = get_val(income, ['Ebit', 'Operating Income']) / 1e6
+            ebit = get_val(income, ['EBIT', 'Operating Income']) / 1e6
             tax_exp = get_val(income, ['Tax Provision', 'Income Tax Expense']) / 1e6
             
-            # Balance Sheet Items
+            # Balance Sheet (Latest Audited Year)
             total_debt = get_val(bs, ['Total Debt', 'Long Term Debt']) / 1e6
             cash = get_val(bs, ['Cash And Cash Equivalents', 'Cash Cash Equivalents And Short Term Investments']) / 1e6
             
-            # Cash Flow Items
+            # Cash Flow
             capex = abs(get_val(cf, ['Capital Expenditure', 'Net PPE Purchase And Sale'])) / 1e6
             depr = get_val(cf, ['Depreciation And Amortization', 'Depreciation']) / 1e6
-
-            # --- CALCULATE UNLEVERED FCF ---
-            # Formula: EBIT * (1 - Tax Rate) + Depr - Capex
-            tax_rate = abs(tax_exp / ebit) if ebit != 0 else 0.21
-            tax_rate = min(tax_rate, 0.40) # Cap tax rate at 40% for sanity
-            nopat = ebit * (1 - tax_rate)
-            fcf = nopat + depr - capex
 
             return {
                 "name": info.get('longName', self.ticker),
                 "revenue": revenue,
                 "ebit": ebit,
-                "fcf": fcf,  # Crucial for run_dcf_engine
-                "tax_rate": tax_rate,
+                "tax_rate": abs(tax_exp / ebit) if ebit != 0 else 0.21,
                 "capex": capex,
                 "depr": depr,
                 "debt": total_debt,
@@ -57,5 +54,5 @@ class SECDataFetcher:
                 "shares": info.get('sharesOutstanding', 1)
             }
         except Exception as e:
-            st.error(f"Error fetching SEC data for {self.ticker}: {str(e)}")
+            st.error(f"SEC Data Error: {str(e)}")
             return None
