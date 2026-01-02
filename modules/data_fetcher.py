@@ -8,7 +8,7 @@ import time
 class SECDataFetcher:
     def __init__(self, ticker):
         self.ticker = ticker.upper()
-        # Headers are a dictionary (unhashable)
+        # Headers are a dictionary, which is unhashable
         self.headers = {
             'User-Agent': 'Mountain Path Valuation research@mountainpath.edu',
             'Accept-Encoding': 'gzip, deflate',
@@ -17,18 +17,18 @@ class SECDataFetcher:
 
     def get_valuation_inputs(self):
         """
-        Public method to call the cached logic.
-        We pass 'self.ticker' as the primary hash key.
-        We pass 'self' and 'self.headers' with underscores to bypass hashing.
+        This wrapper passes arguments to the cached function.
+        We pass self.ticker as a normal string (hashable).
+        We pass 'self' and 'headers' with underscores to skip hashing.
         """
         return self._fetch_ticker_data(self.ticker, self, self.headers)
 
     @st.cache_data(ttl=3600)
     def _fetch_ticker_data(ticker_str, _self, _headers):
         """
-        The underscores in '_self' and '_headers' are the fix.
-        Streamlit will now only use 'ticker_str' to decide whether to 
-        load from cache or rerun the fetch.
+        FIX: Adding '_' before self and headers tells Streamlit:
+        'Ignore these for hashing purposes.' 
+        Only ticker_str will be used to create the cache key.
         """
         try:
             # 1. Map Ticker to CIK
@@ -47,7 +47,7 @@ class SECDataFetcher:
             
             if not cik: return None
 
-            # 2. Fetch Audited Facts
+            # 2. Fetch Audited Facts from SEC
             facts_url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
             # Use the ignored _headers parameter for the actual request
             facts_res = requests.get(facts_url, headers=_headers)
@@ -59,7 +59,7 @@ class SECDataFetcher:
                     return sorted(data, key=lambda x: x['end'])[-1]['val']
                 except: return 0
 
-            # 3. Market Price
+            # 3. Fetch Real-time Market Price
             stock = yf.Ticker(ticker_str)
             hist = stock.history(period="1d")
             current_price = hist['Close'].iloc[-1] if not hist.empty else 0
