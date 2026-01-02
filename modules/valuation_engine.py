@@ -3,76 +3,52 @@ import pandas as pd
 import numpy as np
 
 def run_multi_valuation(inputs, growth_rate, wacc, t_growth, market_data):
-    """
-    Institutional Multi-Method Valuation Engine
-    Calculates: DCF (FCFF), DDM (Dividend Discount), and Relative P/E Valuation
-    """
-    # --- 1. DCF SECTION (Two-Stage Free Cash Flow to Firm) ---
-    projection_years = 5
+    """Institutional Valuation using NOPAT and Reinvestment Rates"""
     rev = inputs['revenue']
-    
-    # EBIT Margin from audited data or industry floor
-    margin = inputs['ebit'] / inputs['revenue'] if inputs['revenue'] > 0 else 0.15
+    ebit = inputs['ebit']
     tax_rate = inputs.get('tax_rate', 0.21)
     
+    # Growth must be funded. Reinvestment Rate = Growth / Return on Capital (ROC)
+    # We assume a standard 15% ROC for large-cap tech.
+    assumed_roc = 0.15 
+    reinvestment_rate = min(growth_rate / assumed_roc, 0.80) 
+
     projections = []
-    for i in range(projection_years):
+    for i in range(5):
         rev *= (1 + growth_rate)
-        year_ebit = rev * margin
+        year_ebit = rev * (ebit / inputs['revenue']) if inputs['revenue'] > 0 else 0
         year_nopat = year_ebit * (1 - tax_rate)
         
-        # FCFF = NOPAT - Reinvestment (Simplified proxy)
-        # Using a standard 30% reinvestment rate for growth
-        fcff = year_nopat * 0.7 
+        # FCFF = NOPAT * (1 - Reinvestment Rate)
+        fcff = year_nopat * (1 - reinvestment_rate)
+        pv = fcff / (1 + wacc)**(i + 1)
         
-        pv_factor = 1 / (1 + wacc)**(i + 1)
-        pv_fcff = fcff * pv_factor
-        
-        projections.append({
-            'Year': 2026 + i, 
-            'Revenue': rev, 
-            'FCFF': fcff, 
-            'PV_FCFF': pv_fcff
-        })
+        projections.append({'Year': 2026+i, 'Revenue': rev, 'FCFF': fcff, 'PV_FCFF': pv})
     
     df = pd.DataFrame(projections)
     
-    # Terminal Value Guard
+    # Terminal Value stability guard
     stable_wacc = max(wacc, t_growth + 0.01)
-    last_fcff = projections[-1]['FCFF']
-    terminal_value = (last_fcff * (1 + t_growth)) / (stable_wacc - t_growth)
-    pv_terminal = terminal_value / (1 + stable_wacc)**projection_years
+    terminal_value = (projections[-1]['FCFF'] * (1 + t_growth)) / (stable_wacc - t_growth)
+    pv_terminal = terminal_value / (1 + stable_wacc)**5
     
-    # Enterprise Value (EV) and Equity Value
     ev = df['PV_FCFF'].sum() + pv_terminal
     equity_value = ev - inputs['debt'] + inputs['cash']
     price_dcf = (equity_value * 1e6) / inputs['shares'] if inputs['shares'] > 0 else 0
 
-    # --- 2. DDM & P/E Valuations ---
-    beta = inputs.get('beta', 1.1)
-    ke = market_data['rf'] + (beta * market_data['erp'])
-    dps = (inputs['dividends'] / inputs['shares']) * 1e6 if inputs['shares'] > 0 else 0
-    price_ddm = (dps * (1 + 0.02)) / (ke - 0.02) if ke > 0.02 else 0
-    
+    # Earnings Multiple
     eps = (inputs['net_income'] / inputs['shares']) * 1e6 if inputs['shares'] > 0 else 0
-    price_pe = eps * 15 # baseline conservative P/E multiple
+    price_pe = eps * 15 
 
     return {
-        "df": df,
-        "dcf_price": price_dcf,
-        "ddm_price": price_ddm,
-        "pe_price": price_pe,
-        "ev": ev,
-        "pv_terminal": pv_terminal
+        "df": df, "dcf_price": price_dcf, "pe_price": price_pe,
+        "ev": ev, "pv_terminal": pv_terminal, 
+        "current_price": inputs['current_price'], "ddm_price": 0
     }
 
 def calculate_sensitivity(inputs, growth_rate, wacc_range, g_range):
-    """
-    Generates an Enterprise Value matrix ($B) for heatmap visualization
-    This is the missing function causing your ImportError.
-    """
+    """Generates the Enterprise Value matrix for the heatmap"""
     matrix = np.zeros((len(wacc_range), len(g_range)))
-    # Standard sensitivity constants
     market_data = {'rf': 0.045, 'erp': 0.055} 
     
     for i, w in enumerate(wacc_range):
@@ -81,7 +57,6 @@ def calculate_sensitivity(inputs, growth_rate, wacc_range, g_range):
                 matrix[i, j] = np.nan
             else:
                 res = run_multi_valuation(inputs, growth_rate, w, g, market_data)
-                # Results in Billions for the UI heatmap
-                matrix[i, j] = res['ev'] / 1000 
+                matrix[i, j] = res['ev'] / 1000 # Return in Billions
                 
     return matrix
