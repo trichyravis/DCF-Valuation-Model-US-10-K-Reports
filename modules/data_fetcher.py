@@ -58,6 +58,26 @@ class SECDataFetcher:
                 except:
                     return 0
             
+            def get_shares():
+                """Get shares from DEI taxonomy - returns in actual shares (not millions)"""
+                try:
+                    # Try to get from DEI taxonomy
+                    dei_data = facts.get('facts', {}).get('dei', {}).get('EntityCommonStockSharesOutstanding', {}).get('units', {})
+                    
+                    # Look for 'pure' unit (dimensionless - just shares count)
+                    shares_val = dei_data.get('pure', [])
+                    if shares_val:
+                        return sorted(shares_val, key=lambda x: x.get('end', ''))[-1].get('val', 0)
+                    
+                    # If not found, try other units
+                    for unit_type, unit_data in dei_data.items():
+                        if unit_data:
+                            return sorted(unit_data, key=lambda x: x.get('end', ''))[-1].get('val', 0)
+                    
+                    return 0
+                except:
+                    return 0
+            
             # Step 5: Get current market price
             try:
                 stock = yf.Ticker(self.ticker)
@@ -66,10 +86,15 @@ class SECDataFetcher:
             except:
                 current_price = 0
             
-            # Return all financial metrics
+            # Step 6: Fetch and normalize all values
+            shares_absolute = get_shares()  # This is in actual shares (e.g., 2.5 billion)
+            shares_millions = shares_absolute / 1e6 if shares_absolute > 0 else 1e6  # Convert to millions
+            
+            # Return all financial metrics with shares in MILLIONS
             return {
                 "name": self.ticker,
                 "current_price": current_price,
+                # All revenue/debt/cash in MILLIONS from SEC
                 "revenue": get_val('Revenues') / 1e6 or get_val('RevenueFromContractWithCustomerExcludingCostReportedAmount') / 1e6,
                 "ebit": get_val('OperatingIncomeLoss') / 1e6,
                 "net_income": get_val('NetIncomeLoss') / 1e6,
@@ -79,7 +104,8 @@ class SECDataFetcher:
                 "cash": get_val('CashAndCashEquivalentsAtCarryingValue') / 1e6,
                 "interest_exp": get_val('InterestExpense') / 1e6,
                 "dividends": get_val('PaymentsOfDividends') / 1e6,
-                "shares": get_val('EntityCommonStockSharesOutstanding', 'dei') or 1e6,
+                # SHARES in MILLIONS (this is the fix!)
+                "shares": shares_millions,
                 "tax_rate": 0.21,
                 "beta": 1.1
             }
