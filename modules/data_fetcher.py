@@ -1,63 +1,53 @@
 
+import yfinance as yf
 import pandas as pd
-import numpy as np
+import streamlit as st
 
-def run_dcf_engine(inputs, growth_rate, wacc, t_growth):
-    """Calculates a 5-year Stage 1 projection and Stage 2 Terminal Value"""
-    years = list(range(2026, 2031))
-    projections = []
-    
-    # Starting values from latest 10-K
-    rev = inputs['revenue']
-    margin = inputs['ebit'] / inputs['revenue']
-    tax_rate = min(inputs['tax_rate'], 0.30) # Capped at 30% for conservative modeling
-    
-    # Stage 1: 5-Year High Growth Period
-    for i in range(5):
-        rev *= (1 + growth_rate)
-        ebit = rev * margin
-        ebit_at = ebit * (1 - tax_rate)
-        
-        # FCFF = EBIT(1-t) + Depr - CapEx - ΔWC
-        # Using a normalized 15% of Revenue for CapEx/WC reinvestment
-        reinvestment = rev * 0.15 
-        fcff = ebit_at - reinvestment + (inputs['depr'] * (rev/inputs['revenue']))
-        
-        pv_factor = 1 / (1 + wacc) ** (i + 1)
-        pv_fcff = fcff * pv_factor
-        
-        projections.append({
-            'Year': years[i],
-            'Revenue': rev,
-            'FCFF': fcff,
-            'PV_FCFF': pv_fcff
-        })
+class SECDataFetcher:
+    def __init__(self, ticker):
+        self.ticker = ticker
+        self.stock = yf.Ticker(ticker)
 
-    df = pd.DataFrame(projections)
-    
-    # Stage 2: Terminal Value (Gordon Growth Method)
-    last_fcff = projections[-1]['FCFF']
-    terminal_value = (last_fcff * (1 + t_growth)) / (wacc - t_growth)
-    pv_terminal_value = terminal_value / (1 + wacc) ** 5
-    
-    # Valuation Aggregation
-    enterprise_value = df['PV_FCFF'].sum() + pv_terminal_value
-    equity_value = enterprise_value - inputs['debt'] + inputs['cash']
-    implied_price = (equity_value * 1e6) / inputs['shares']
-    
-    return df, enterprise_value, equity_value, implied_price
+    def get_valuation_inputs(self):
+        """Fetches audited financial data and standardizes to Millions ($M)"""
+        try:
+            # Fetching Statement Data
+            income = self.stock.financials
+            bs = self.stock.balance_sheet
+            cf = self.stock.cashflow
+            info = self.stock.info
+            
+            # Helper to handle missing labels across different company filings
+            def get_val(df, labels):
+                for label in labels:
+                    if label in df.index:
+                        return df.loc[label].iloc[0]
+                return 0
 
-def calculate_sensitivity(inputs, growth_rate, wacc_range, g_range):
-    """Generates an Enterprise Value matrix for sensitivity analysis"""
-    matrix = np.zeros((len(wacc_range), len(g_range)))
-    
-    for i, w in enumerate(wacc_range):
-        for j, g in enumerate(g_range):
-            # Ensure WACC > Growth to avoid division by zero in Gordon Growth
-            if w <= g:
-                matrix[i, j] = np.nan
-            else:
-                _, ev, _, _ = run_dcf_engine(inputs, growth_rate, w, g)
-                matrix[i, j] = ev / 1000 # Convert to Billions for display
-                
-    return matrix
+            # Extraction Logic (Standardizing to Millions)
+            revenue = get_val(income, ['Total Revenue', 'Operating Revenue']) / 1e6
+            ebit = get_val(income, ['Ebit', 'Operating Income']) / 1e6
+            tax_exp = get_val(income, ['Tax Provision', 'Income Tax Expense']) / 1e6
+            
+            # Balance Sheet Items
+            total_debt = get_val(bs, ['Total Debt', 'Long Term Debt']) / 1e6
+            cash = get_val(bs, ['Cash And Cash Equivalents', 'Cash Cash Equivalents And Short Term Investments']) / 1e6
+            
+            # Cash Flow Items
+            capex = abs(get_val(cf, ['Capital Expenditure', 'Net PPE Purchase And Sale'])) / 1e6
+            depr = get_val(cf, ['Depreciation And Amortization', 'Depreciation']) / 1e6
+
+            return {
+                "name": info.get('longName', self.ticker),
+                "revenue": revenue,
+                "ebit": ebit,
+                "tax_rate": abs(tax_exp / ebit) if ebit != 0 else 0.21,
+                "capex": capex,
+                "depr": depr,
+                "debt": total_debt,
+                "cash": cash,
+                "shares": info.get('sharesOutstanding', 1)
+            }
+        except Exception as e:
+            st.error(f"Error fetching SEC data for {self.ticker}: {str(e)}")
+            return None
