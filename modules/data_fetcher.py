@@ -1,58 +1,63 @@
 
-import yfinance as yf
 import pandas as pd
-import streamlit as st
+import numpy as np
 
-class SECDataFetcher:
-    def __init__(self, ticker):
-        self.ticker = ticker
-        # Adding a session with headers helps prevent "Too Many Requests" errors
-        self.stock = yf.Ticker(ticker)
+def run_dcf_engine(inputs, growth_rate, wacc, t_growth):
+    """Calculates a 5-year Stage 1 projection and Stage 2 Terminal Value"""
+    years = list(range(2026, 2031))
+    projections = []
+    
+    # Starting values from latest 10-K
+    rev = inputs['revenue']
+    margin = inputs['ebit'] / inputs['revenue']
+    tax_rate = min(inputs['tax_rate'], 0.30) # Capped at 30% for conservative modeling
+    
+    # Stage 1: 5-Year High Growth Period
+    for i in range(5):
+        rev *= (1 + growth_rate)
+        ebit = rev * margin
+        ebit_at = ebit * (1 - tax_rate)
+        
+        # FCFF = EBIT(1-t) + Depr - CapEx - ΔWC
+        # Using a normalized 15% of Revenue for CapEx/WC reinvestment
+        reinvestment = rev * 0.15 
+        fcff = ebit_at - reinvestment + (inputs['depr'] * (rev/inputs['revenue']))
+        
+        pv_factor = 1 / (1 + wacc) ** (i + 1)
+        pv_fcff = fcff * pv_factor
+        
+        projections.append({
+            'Year': years[i],
+            'Revenue': rev,
+            'FCFF': fcff,
+            'PV_FCFF': pv_fcff
+        })
 
-    def get_valuation_inputs(self):
-        """Fetches audited 10-K financial data and standardizes to Millions ($M)"""
-        try:
-            # yfinance pulls the 'financials' table which maps to the 10-K
-            # We use .annuals to ensure we aren't picking up 10-Q (quarterly) data
-            income = self.stock.get_financials(freq='annual')
-            bs = self.stock.get_balance_sheet(freq='annual')
-            cf = self.stock.get_cashflow(freq='annual')
-            info = self.stock.info
-            
-            if income.empty or bs.empty:
-                return None
+    df = pd.DataFrame(projections)
+    
+    # Stage 2: Terminal Value (Gordon Growth Method)
+    last_fcff = projections[-1]['FCFF']
+    terminal_value = (last_fcff * (1 + t_growth)) / (wacc - t_growth)
+    pv_terminal_value = terminal_value / (1 + wacc) ** 5
+    
+    # Valuation Aggregation
+    enterprise_value = df['PV_FCFF'].sum() + pv_terminal_value
+    equity_value = enterprise_value - inputs['debt'] + inputs['cash']
+    implied_price = (equity_value * 1e6) / inputs['shares']
+    
+    return df, enterprise_value, equity_value, implied_price
 
-            def get_val(df, labels):
-                for label in labels:
-                    if label in df.index:
-                        val = df.loc[label].iloc[0]
-                        return val if pd.notnull(val) else 0
-                return 0
-
-            # 10-K Extraction (Values in Millions)
-            revenue = get_val(income, ['Total Revenue', 'Operating Revenue']) / 1e6
-            ebit = get_val(income, ['EBIT', 'Operating Income']) / 1e6
-            tax_exp = get_val(income, ['Tax Provision', 'Income Tax Expense']) / 1e6
-            
-            # Balance Sheet (Latest Audited Year)
-            total_debt = get_val(bs, ['Total Debt', 'Long Term Debt']) / 1e6
-            cash = get_val(bs, ['Cash And Cash Equivalents', 'Cash Cash Equivalents And Short Term Investments']) / 1e6
-            
-            # Cash Flow
-            capex = abs(get_val(cf, ['Capital Expenditure', 'Net PPE Purchase And Sale'])) / 1e6
-            depr = get_val(cf, ['Depreciation And Amortization', 'Depreciation']) / 1e6
-
-            return {
-                "name": info.get('longName', self.ticker),
-                "revenue": revenue,
-                "ebit": ebit,
-                "tax_rate": abs(tax_exp / ebit) if ebit != 0 else 0.21,
-                "capex": capex,
-                "depr": depr,
-                "debt": total_debt,
-                "cash": cash,
-                "shares": info.get('sharesOutstanding', 1)
-            }
-        except Exception as e:
-            st.error(f"SEC Data Error: {str(e)}")
-            return None
+def calculate_sensitivity(inputs, growth_rate, wacc_range, g_range):
+    """Generates an Enterprise Value matrix for sensitivity analysis"""
+    matrix = np.zeros((len(wacc_range), len(g_range)))
+    
+    for i, w in enumerate(wacc_range):
+        for j, g in enumerate(g_range):
+            # Ensure WACC > Growth to avoid division by zero in Gordon Growth
+            if w <= g:
+                matrix[i, j] = np.nan
+            else:
+                _, ev, _, _ = run_dcf_engine(inputs, growth_rate, w, g)
+                matrix[i, j] = ev / 1000 # Convert to Billions for display
+                
+    return matrix
