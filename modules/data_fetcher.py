@@ -37,11 +37,19 @@ class SECDataFetcher:
             capex = abs(get_val(cf, ['Capital Expenditure', 'Net PPE Purchase And Sale'])) / 1e6
             depr = get_val(cf, ['Depreciation And Amortization', 'Depreciation']) / 1e6
 
+            # --- CALCULATE UNLEVERED FCF ---
+            # Formula: EBIT * (1 - Tax Rate) + Depr - Capex
+            tax_rate = abs(tax_exp / ebit) if ebit != 0 else 0.21
+            tax_rate = min(tax_rate, 0.40) # Cap tax rate at 40% for sanity
+            nopat = ebit * (1 - tax_rate)
+            fcf = nopat + depr - capex
+
             return {
                 "name": info.get('longName', self.ticker),
                 "revenue": revenue,
                 "ebit": ebit,
-                "tax_rate": abs(tax_exp / ebit) if ebit != 0 else 0.21,
+                "fcf": fcf,  # Crucial for run_dcf_engine
+                "tax_rate": tax_rate,
                 "capex": capex,
                 "depr": depr,
                 "debt": total_debt,
