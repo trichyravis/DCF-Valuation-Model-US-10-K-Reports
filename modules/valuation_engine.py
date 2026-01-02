@@ -2,72 +2,47 @@
 import pandas as pd
 import numpy as np
 
-def run_dcf_engine(inputs, growth_rate, wacc, t_growth):
-    """Calculates a 5-year Stage 1 projection and Stage 2 Terminal Value"""
-    years = list(range(2026, 2031))
-    projections = []
+def run_multi_valuation(inputs, growth_rate, wacc, t_growth, market_data):
+    """Integrates Pfizer script logic into the terminal engine"""
     
-    # Starting values from audited SEC data
+    # --- 1. DCF SECTION ---
+    projection_years = 5
     rev = inputs['revenue']
-    # Use Operating Income (EBIT) margin from the latest 10-K
-    margin = inputs['ebit'] / inputs['revenue'] if inputs['revenue'] != 0 else 0
-    tax_rate = min(inputs['tax_rate'], 0.30) # Capped for conservative modeling
+    margin = inputs['ebit'] / inputs['revenue'] if inputs['revenue'] > 0 else 0.15
     
-    # Stage 1: 5-Year High Growth Period
-    for i in range(5):
+    projections = []
+    for i in range(projection_years):
         rev *= (1 + growth_rate)
         ebit = rev * margin
-        ebit_at = ebit * (1 - tax_rate)
+        tax_impact = ebit * (1 - inputs['tax_rate'])
+        # Pfizer script logic: Reinvestment proxy (CapEx + WC)
+        fcff = tax_impact + inputs['depr'] - (inputs['capex'] * (rev/inputs['revenue']))
         
-        # FCFF Formula: EBIT(1-t) + Depr - CapEx - ΔWC
-        # Normalized Reinvestment: 15% of Revenue (standard institutional proxy)
-        reinvestment = rev * 0.15 
-        # Scale depreciation with revenue growth
-        scaled_depr = inputs['depr'] * (rev / inputs['revenue']) if inputs['revenue'] != 0 else 0
-        
-        fcff = ebit_at - reinvestment + scaled_depr
-        
-        pv_factor = 1 / (1 + wacc) ** (i + 1)
-        pv_fcff = fcff * pv_factor
-        
-        projections.append({
-            'Year': years[i],
-            'Revenue': rev,
-            'FCFF': fcff,
-            'PV_FCFF': pv_fcff
-        })
-
+        pv = fcff / (1 + wacc)**(i+1)
+        projections.append({'Year': 2026+i, 'FCFF': fcff, 'PV_FCFF': pv})
+    
     df = pd.DataFrame(projections)
+    tv = projections[-1]['FCFF'] * (1 + t_growth) / (wacc - t_growth)
+    pv_tv = tv / (1 + wacc)**5
     
-    # Stage 2: Terminal Value (Gordon Growth Method)
-    # Safety Check: WACC must be greater than terminal growth
-    if wacc <= t_growth:
-        t_growth = wacc - 0.01 
+    ev = df['PV_FCFF'].sum() + pv_tv
+    equity_dcf = ev - inputs['debt'] + inputs['cash']
+    price_dcf = (equity_dcf * 1e6) / inputs['shares']
 
-    last_fcff = projections[-1]['FCFF']
-    terminal_value = (last_fcff * (1 + t_growth)) / (wacc - t_growth)
-    pv_terminal_value = terminal_value / (1 + wacc) ** 5
-    
-    # Valuation Aggregation (Results in Millions)
-    enterprise_value = df['PV_FCFF'].sum() + pv_terminal_value
-    # Equity Value = EV - Debt + Cash
-    equity_value = enterprise_value - inputs['debt'] + inputs['cash']
-    
-    # Implied Price: (Equity Value in Millions * 1,000,000) / Shares Outstanding
-    implied_price = (equity_value * 1e6) / inputs['shares'] if inputs['shares'] != 0 else 0
-    
-    return df, enterprise_value, equity_value, implied_price
+    # --- 2. DDM SECTION ---
+    # Cost of Equity calculation (CAPM)
+    ke = market_data['rf'] + inputs.get('beta', 1.0) * (market_data['erp'])
+    dps = (inputs['dividends'] / inputs['shares']) * 1e6
+    price_ddm = (dps * (1 + 0.02)) / (ke - 0.02) if ke > 0.02 else 0
 
-def calculate_sensitivity(inputs, growth_rate, wacc_range, g_range):
-    """Generates an Enterprise Value matrix (in Billions) for Heatmap visualization"""
-    matrix = np.zeros((len(wacc_range), len(g_range)))
-    
-    for i, w in enumerate(wacc_range):
-        for j, g in enumerate(g_range):
-            if w <= g:
-                matrix[i, j] = np.nan
-            else:
-                _, ev, _, _ = run_dcf_engine(inputs, growth_rate, w, g)
-                matrix[i, j] = ev / 1000 # Convert Millions to Billions for the Heatmap
-                
-    return matrix
+    # --- 3. P/E SECTION ---
+    eps = (inputs['net_income'] / inputs['shares']) * 1e6
+    price_pe = eps * 15 # Using conservative 15x multiple
+
+    return {
+        "df": df,
+        "dcf_price": price_dcf,
+        "ddm_price": price_ddm,
+        "pe_price": price_pe,
+        "ev": ev
+    }
