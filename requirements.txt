@@ -1,17 +1,10 @@
 
-# Core Framework
 streamlit>=1.41.0
-
-# Data & Finance
 yfinance>=0.2.35
-requests>=2.31.0
 pandas>=2.2.0
 numpy>=1.26.0
-
-# Math & Charts
+requests>=2.31.0
 plotly>=5.18.0
 scipy>=1.11.0
-
-# Reports
 fpdf2>=2.7.0
 Pillow>=10.0.0
