@@ -90,11 +90,11 @@ def get_base_year_operating_data(xbrl: dict, extract) -> dict:
     # RETURN CLEAN BASE-YEAR DATA
     # -------------------------------
     return {
-        "Year": int(year),
-        "Revenue": float(revenue),
-        "EBIT": float(ebit),
-        "TaxRate": float(tax_rate),
-        "Depreciation": float(depreciation),
-        "CapEx": float(capex),
+        "year": int(year),
+        "revenue": float(revenue),
+        "ebit": float(ebit),
+        "operating_margin": float(ebit / revenue),
+        "tax_rate": float(tax_rate),
+        "depreciation": float(depreciation),
+        "capex": float(capex),
     }
-
