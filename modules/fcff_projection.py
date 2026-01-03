@@ -1,58 +1,45 @@
 
-import numpy as np
 import pandas as pd
 
 
-def dcf_valuation(
-    fcff_projection: pd.DataFrame,
-    wacc: float,
-    terminal_growth: float,
-    net_debt: float = 0.0,
-    shares_outstanding: float = 1.0,
-):
+def project_fcff(
+    base_revenue: float,
+    operating_margin: float,
+    tax_rate: float,
+    growth_rates: list,
+    sales_to_capital: float,
+) -> pd.DataFrame:
     """
-    Perform DCF valuation using projected FCFF
-
-    Parameters
-    ----------
-    fcff_projection : DataFrame
-        Must contain columns ['Year', 'FCFF']
-    wacc : float
-    terminal_growth : float
-    net_debt : float
-    shares_outstanding : float
+    Project FCFF using Damodaran-style reinvestment logic
     """
 
-    fcff = fcff_projection["FCFF"].values
-    years = np.arange(1, len(fcff) + 1)
+    results = []
+    revenue_prev = base_revenue
 
-    # -------------------------------
-    # Discount FCFF
-    # -------------------------------
-    discount_factors = (1 + wacc) ** years
-    pv_fcff = fcff / discount_factors
+    for year, g in enumerate(growth_rates, start=1):
+        revenue = revenue_prev * (1 + g)
 
-    # -------------------------------
-    # Terminal Value
-    # -------------------------------
-    if wacc <= terminal_growth:
-        raise ValueError("WACC must be greater than terminal growth rate")
+        ebit = revenue * operating_margin
+        nopat = ebit * (1 - tax_rate)
 
-    terminal_fcff = fcff[-1] * (1 + terminal_growth)
-    terminal_value = terminal_fcff / (wacc - terminal_growth)
-    pv_terminal_value = terminal_value / discount_factors[-1]
+        revenue_change = revenue - revenue_prev
+        reinvestment = (
+            revenue_change / sales_to_capital
+            if sales_to_capital > 0
+            else 0.0
+        )
 
-    # -------------------------------
-    # Valuation
-    # -------------------------------
-    enterprise_value = pv_fcff.sum() + pv_terminal_value
-    equity_value = enterprise_value - net_debt
-    fair_value_per_share = equity_value / shares_outstanding
+        fcff = nopat - reinvestment
 
-    return {
-        "EnterpriseValue": enterprise_value,
-        "EquityValue": equity_value,
-        "FairValuePerShare": fair_value_per_share,
-        "PV_FCFF": pv_fcff,
-        "PV_Terminal": pv_terminal_value,
-    }
+        results.append({
+            "Year": year,
+            "Revenue": revenue,
+            "EBIT": ebit,
+            "NOPAT": nopat,
+            "Reinvestment": reinvestment,
+            "FCFF": fcff,
+        })
+
+        revenue_prev = revenue
+
+    return pd.DataFrame(results)
