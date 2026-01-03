@@ -3,44 +3,60 @@ import pandas as pd
 
 
 def project_fcff(
-    base_year: dict,
+    base_revenue: float,
+    operating_margin: float,
+    tax_rate: float,
     growth_rates: list[float],
     sales_to_capital: float,
 ) -> pd.DataFrame:
     """
-    Project FCFF over explicit forecast period using
-    Damodaran-style reinvestment logic
-    """
+    Project FCFF over an explicit forecast period using
+    Damodaran-style reinvestment logic.
 
-    revenue_0 = base_year["Revenue"]
-    ebit_margin = base_year["EBIT"] / revenue_0 if revenue_0 > 0 else 0.0
-    tax_rate = base_year["TaxRate"]
+    Parameters
+    ----------
+    base_revenue : float
+        Latest audited revenue (from 10-K)
+    operating_margin : float
+        Base-year EBIT / Revenue
+    tax_rate : float
+        Effective tax rate
+    growth_rates : list[float]
+        Revenue growth assumptions (explicit years)
+    sales_to_capital : float
+        Revenue / Invested Capital (capital efficiency)
+    """
 
     rows = []
 
-    revenue_prev = revenue_0
+    revenue_prev = base_revenue
 
-    for i, g in enumerate(growth_rates, start=1):
+    for year, g in enumerate(growth_rates, start=1):
+        # Revenue forecast
         revenue = revenue_prev * (1 + g)
 
         # Operating income
-        ebit = revenue * ebit_margin
+        ebit = revenue * operating_margin
         nopat = ebit * (1 - tax_rate)
 
-        # Reinvestment (Sales-to-Capital discipline)
+        # Reinvestment (growth-driven)
         revenue_change = revenue - revenue_prev
-        reinvestment = revenue_change / sales_to_capital if sales_to_capital > 0 else 0.0
+        reinvestment = (
+            revenue_change / sales_to_capital
+            if sales_to_capital > 0
+            else 0.0
+        )
 
         # FCFF
         fcff = nopat - reinvestment
 
         rows.append({
-            "Year": i,
+            "Year": year,
             "Revenue": revenue,
             "EBIT": ebit,
             "NOPAT": nopat,
             "Reinvestment": reinvestment,
-            "FCFF": fcff
+            "FCFF": fcff,
         })
 
         revenue_prev = revenue
